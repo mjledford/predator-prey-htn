@@ -9,6 +9,8 @@ import posggym
 
 import posggym.envs.grid_world.predator_prey as pp
 
+from gymnasium.wrappers import RecordVideo
+
 from wrappers import ActionLoggingWrapper
 from observers import HelloObserver
 
@@ -49,9 +51,10 @@ def main():
         grid="10x10",
         num_predators=2,
         num_prey=1,
-        render_mode="human",
+        render_mode= "human" ,
     )
     env = ActionLoggingWrapper(env, debug=True)
+    #env = RecordVideo(env, video_folder="./videos/", name_prefix="pred_prey", episode_trigger=lambda x: True)
    
     print(f"[INFO] Printing GTPyhop Domain")
     gtpyhop.print_domain()
@@ -101,6 +104,7 @@ def main():
 
         # step environment
         observations, rewards, terminations, truncations, all_done, infos = env.step(actions)
+        
         observer.on_step(t, observations, rewards, terminations, truncations, infos)
         # 4) compact tick summary
         pprint(
@@ -110,7 +114,7 @@ def main():
             f"| trunc={sum(1 for v in truncations.values() if v)}"
         )
 
-        env.render()
+        env.render() #not needed during video recording
         #time.sleep(0.03)
         time.sleep(SLEEP)
 
@@ -122,26 +126,11 @@ def main():
 
     print(f"Episode finished after {t} steps")
     env.close()
+    
 
 
 if __name__ == "__main__":
     main()
 
-# def reshape5(obs):
-#     return [obs[i:i+5] for i in range(0, 25, 5)]
 
-# def prey_offsets(obs):
-#     PREY = 3
-#     out = []
-#     for k, v in enumerate(obs):
-#         if v == PREY:
-#             row, col = divmod(k, 5)
-#             out.append((col-2, row-2))  # (dx, dy)
-#     return out
-
-# for aid, obs in observations.items():
-#     print(f"\nagent {aid}")
-#     for row in reshape5(obs):
-#         print(" ".join(map(str,row)))
-#     print("prey rel offsets (dx,dy):", prey_offsets(obs))
     
