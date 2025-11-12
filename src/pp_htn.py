@@ -1,10 +1,25 @@
 import gtpyhop
+import random
 
+random.seed(42)  # for reproducibility
 # env action ids
 DO_NOTHING, UP, DOWN, LEFT, RIGHT = 0, 1, 2, 3, 4
 
 # local observation cell codes
 EMPTY, WALL, PRED, PREY = 0, 1, 2, 3
+
+# offsets for neighbors in the obs window (dx, dy)
+# if agent is at (X,Y), then neighbor at (X+dx, Y+dy)
+# Note: +x is right, +y is down
+# For example (5x5 observation window), if agent is at (2,2) then UP target cell/neighbor is at (2,1), DOWN (2,3), LEFT (1,2), RIGHT (3,2)
+DIRS = {
+    UP:    (0, -1),
+    DOWN:  (0, 1),
+    LEFT:  (-1, 0),
+    RIGHT: (1, 0),
+}
+
+ORDERED_DIRS = [UP, DOWN, LEFT, RIGHT]
 
 # primitive action
 def do(state, agent_id, action_id):
@@ -19,17 +34,22 @@ def do(state, agent_id, action_id):
 
 # helper function to pick action from local obs
 def action_from_obs(obs, obs_dim):
+    """
+    Greedy chase if any PREY cells visible in local obs window;
+    """
     size = 2 * obs_dim + 1
     center = obs_dim
 
     # find all visible prey cells in the (2*obs_dim+1)^2 egocentric window
     prey_idxs = [k for k, v in enumerate(obs) if v == PREY]
+    # if none visible, do nothing
     if not prey_idxs:
         return DO_NOTHING  
 
     # pick the nearest prey by Manhattan distance
     best_md = 10**9
-    best_dx = best_dy = 0
+    best_dx = 0
+    best_dy = 0
     for k in prey_idxs:
         r, c = divmod(k, size)
         dx = c - center         # +x = right
@@ -55,7 +75,29 @@ def action_from_obs(obs, obs_dim):
         if dx < 0:  return LEFT
         return DO_NOTHING
 
+def legal_moves_from_obs(obs, obs_dim):
+    """
+    Given local obs, return list of legal move action_ids (no WALL)
+    """
+    size = 2 * obs_dim + 1
+    center = obs_dim
+    legal_moves = []
+    for a in ORDERED_DIRS:
+        dx, dy = DIRS[a]
+        nx, ny = center + dx, center + dy
+        # bounds check (should always be in-bounds for local obs window)
+        if not (0 <=nx < size and 0 <= ny < size):
+            continue
+        idx = ny * size + nx
+        if obs[idx] != WALL:
+            legal_moves.append(a)
+    return legal_moves
 
+def _default_fallback_action():
+    return DO_NOTHING
+
+def _default_fallback_plan(agent_id):
+    return [("do", agent_id, DO_NOTHING)]     
 # METHODS for 'choose_action'
 
 def m_chase_if_visible(state, agent_id):
@@ -68,11 +110,47 @@ def m_chase_if_visible(state, agent_id):
     return [("do", agent_id, action)]
 
 def m_patrol_if_not_visible(state, agent_id):
-    """Fallback: simple patrol/right-bias when nothing visible."""
+    """
+    Fallback patrol:
+    - compute legal directions (not into WALL)
+    - optionally include or exclude the last executed action (prev_action)
+      depending on the boolean flag state.keep_prev_action
+    - pick uniformly at random among remaining legal directions
+    """
+    print(f"[DEBUG] Patrol if not visible")
+    
+    obs = state.obs[agent_id]
+    # smart planner determines legal moves from local obs (don't go left if the wall is left, therefore choose up, down, right aka legal moves)
+    legal_moves = legal_moves_from_obs(obs, state.obs_dim)
+    
+    if not legal_moves:
+        return _default_fallback_plan(agent_id) # default = [("do", agent_id, DO_NOTHING)]
+    
+    prev = getattr(state, "prev_action", DO_NOTHING)
+    keep_prev = bool(getattr(state, "keep_prev_action", True))
+    
+    if not keep_prev and prev in legal_moves:
+        # user requested to to filter out the previous direction if possible
+        filtered = [a for a in legal_moves if a != prev]
+        if filtered:
+            legal_moves = filtered
+    
+    
+    rng = getattr(state, "rng", random)
+    
+    # Choose default RIGHT (original progress report 1 basic action to move right)
+    #action = RIGHT
+    # Choose randomly among legal moves
+    action = rng.choice(legal_moves)
+    
     # Example: drift right, otherwise down (modify to taste)
     # You could also keep stateful patrol direction per agent in state.patrol_dir
-    print(f"[DEBUG] Patrol if not visible")
-    return [("do", agent_id, RIGHT)]
+    
+    
+    # Planner receives the last action for THIS afent in state.prev_action
+    #last_act = getattr(state, "p")
+    
+    return [("do", agent_id, action)]
 
 
 # REGISTER domain
