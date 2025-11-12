@@ -21,6 +21,8 @@ DIRS = {
 
 ORDERED_DIRS = [UP, DOWN, LEFT, RIGHT]
 
+DEBUG = False
+
 # primitive action
 def do(state, agent_id, action_id):
     """
@@ -102,11 +104,15 @@ def _default_fallback_plan(agent_id):
 
 def m_chase_if_visible(state, agent_id):
     """If prey visible in local obs, chase it; else fail so next method can try"""
-    print("[DEBUG] Chase if visible")
+    
+    if DEBUG:
+        print("[DEBUG] Chase (prey visible)")
+        
     obs = state.obs[agent_id]
     action = action_from_obs(obs, state.obs_dim)
     if action == DO_NOTHING:
         return False
+    print(f"[INFO] Agent {agent_id} attempting to chase prey with action {action}")
     return [("do", agent_id, action)]
 
 def m_patrol_if_not_visible(state, agent_id):
@@ -117,7 +123,8 @@ def m_patrol_if_not_visible(state, agent_id):
       depending on the boolean flag state.keep_prev_action
     - pick uniformly at random among remaining legal directions
     """
-    print(f"[DEBUG] Patrol if not visible")
+    if DEBUG:
+        print(f"[DEBUG] Patrol (prey not visible)")
     
     obs = state.obs[agent_id]
     # smart planner determines legal moves from local obs (don't go left if the wall is left, therefore choose up, down, right aka legal moves)
@@ -142,13 +149,7 @@ def m_patrol_if_not_visible(state, agent_id):
     #action = RIGHT
     # Choose randomly among legal moves
     action = rng.choice(legal_moves)
-    
-    # Example: drift right, otherwise down (modify to taste)
-    # You could also keep stateful patrol direction per agent in state.patrol_dir
-    
-    
-    # Planner receives the last action for THIS afent in state.prev_action
-    #last_act = getattr(state, "p")
+    print(f"[INFO] Agent {agent_id} attempting to patrol with action {action}")
     
     return [("do", agent_id, action)]
 
