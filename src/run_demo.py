@@ -4,7 +4,7 @@ import inspect
 from pprint import pprint
 import argparse
 import random
-
+import os
 import posggym
 # actions: 0=STAY, 1=UP, 2=DOWN, 3=LEFT, 4=RIGHT (per this env)
 # obs cells: 0=EMPTY, 1=WALL, 2=PREDATOR, 3=PREY
@@ -22,7 +22,7 @@ from pp_htn import (
 )
 
 from plot_utils import plot_trajectories, record_positions
-
+import matplotlib.pyplot as plt
 #KEEP_PREV_ACTION = True  # whether to prefer continuing in same direction when patrolling (planner uses this)
 
 
@@ -35,6 +35,75 @@ ACTION_NAMES = {
     3: "LEFT",
     4: "RIGHT",
 }
+
+def plot_capture_statistics(
+    all_times,
+    capture_times,
+    avg_capture_time,
+    avg_steps_all,
+    save_dir="figures",
+):
+    """
+    Create plots summarizing capture performance across runs.
+
+    Parameters
+    ----------
+    all_times : list[int]
+        Steps until capture or time_horizon for every run.
+    capture_times : list[int]
+        Steps until capture for successful runs only.
+    avg_capture_time : float or None
+        Mean capture time (successful episodes only).
+    avg_steps_all : float
+        Mean steps across ALL runs.
+    save_dir : str
+        Directory where figures will be saved.
+    """
+    os.makedirs(save_dir, exist_ok=True)
+    num_runs = len(all_times)
+    x = list(range(1, num_runs + 1))
+
+    # --- Plot 1: per-run capture times ---
+    plt.figure()
+    plt.plot(x, all_times, marker="o", linestyle="-", label="Per-run steps")
+
+    if avg_capture_time is not None:
+        plt.axhline(
+            y=avg_capture_time,
+            linestyle="--",
+            color="red",
+            label=f"Mean (captures only) = {avg_capture_time:.1f}",
+        )
+
+    plt.axhline(
+        y=avg_steps_all,
+        linestyle=":",
+        color="green",
+        label=f"Mean (all episodes) = {avg_steps_all:.1f}",
+    )
+
+    plt.xlabel("Run index")
+    plt.ylabel("Steps until capture / horizon")
+    plt.title("Predator-Prey: Time to Capture over Multiple Runs")
+    plt.grid(True)
+    plt.legend()
+
+    out1 = os.path.join(save_dir, "time_to_capture_per_run.png")
+    plt.savefig(out1, bbox_inches="tight")
+    print(f"[INFO] Saved: {out1}")
+
+    # --- Plot 2: histogram of capture times (successful only) ---
+    if capture_times:
+        plt.figure()
+        plt.hist(capture_times, bins=20, color="steelblue", edgecolor="black")
+        plt.xlabel("Steps to capture")
+        plt.ylabel("Frequency")
+        plt.title("Distribution of Capture Times (Successful Episodes)")
+        plt.grid(True)
+
+        out2 = os.path.join(save_dir, "capture_time_hist.png")
+        plt.savefig(out2, bbox_inches="tight")
+        print(f"[INFO] Saved: {out2}")
 
 def plan_to_actions(plan):
     """Plan should be in the list[tuple] for: [('do', 0, 4)] --> agent 0 do action 4"""
@@ -59,32 +128,18 @@ def build_planner_state(env, observations):
     
     return s
 
-def main():
+def run_single_episode(
+    seed: int,
+    time_horizon: int = 200,
+    debug: bool = False,
+    keep_prev_action: bool = True,
+    render: bool = False ):
     """
-    Run POSGGym Predator-Prey with GTPyhop HTN planner.
-    
-    Capture Criteria:
-    Prey are captured when at least prey_strength predators are in adjacent cells, 
-    where 1 <= prey_strength <= min(4, num_predators).
+    Run one Predator-Prey episode and return:
+        captured (bool): whether prey was captured
+        steps_to_capture (int or None): number of env steps until capture
+                                        (None if not captured within horizon)
     """
-    # Parse command line arguments
-    parser = argparse.ArgumentParser(description="Run POSGGym Predator-Prey with GTPyhop HTN planner.")
-    parser.add_argument("--debug", action="store_true", help="Enable debug mode with verbose logging.")
-    parser.add_argument("--keep-prev-action", dest="keep_prev_action", action="store_true",
-                        help="When patrolling, allow repeating the previous action.")
-    parser.add_argument("--no-keep-prev-action", dest="keep_prev_action", action="store_false",
-                        help="When patrolling, exclude the previous action if alternatives exist.")
-    parser.add_argument("--time-horizon", type=int, default=200, help="Maximum number of steps per episode.")
-    
-    parser.set_defaults(keep_prev_action=True)
-    args = parser.parse_args()
-    
-    debug = args.debug
-    KEEP_PREV_ACTION = args.keep_prev_action
-    #print("Testing environment creation...")
-    
-    # Environment parameters
-    time_horizon=args.time_horizon
     TARGET_FPS = 5
     SLEEP = 1.0 / TARGET_FPS
     
@@ -96,13 +151,14 @@ def main():
     
     Note: if time_horizon is > max_episode_steps, env will terminate early at max_episode_steps
     """
+    save_plot_trajectories_each_episode = False
     env = posggym.make(
         "PredatorPrey-v0",
-        max_episode_steps=200,
+        max_episode_steps=time_horizon,  # keep aligned with horizon
         grid="10x10",
         num_predators=2,
         num_prey=1,
-        render_mode= "human" ,
+        render_mode="human" if render else None,
     )
     # Instantiate environment with action logging wrapper that has more detailed logging
     env = ActionLoggingWrapper(env, debug=debug)
@@ -159,7 +215,7 @@ def main():
             s.rng = agent_memory[agent_id]["rng"]
             # Inject memory + flags into state for planner use
             s.prev_action = agent_memory[agent_id]["prev_action"]
-            s.keep_prev_action = KEEP_PREV_ACTION
+            s.keep_prev_action = keep_prev_action
 
            
             plan = gtpyhop.find_plan(s, [("choose_action", agent_id)])
@@ -168,10 +224,7 @@ def main():
         
         if debug:
             readable = {aid: f"{act} ({ACTION_NAMES[act]})" for aid, act in actions.items()}
-            print("[DEBUG] Actions:")
-            pprint(readable)
-            print("[DEBUG] Raw:", actions)
-            print("=========================")
+            print("[DEBUG] Actions:", readable)
        
 
         # step environment
@@ -189,30 +242,128 @@ def main():
         
         # 4) compact tick summary
         if debug:
-            pprint(
-                f"[DEBUG] [t={t}] | obs={observations} "
-                f"| rewards={len(rewards)} | done={all_done} "
-                f"| term={sum(1 for v in terminations.values() if v)} "
-                f"| trunc={sum(1 for v in truncations.values() if v)}"
-            )
-
-        env.render() #not needed during video recording
-        #time.sleep(0.03)
-        time.sleep(SLEEP)
+            print(f"[DEBUG] [t={t}] | done={all_done} | term={terminations} | trunc={truncations}")
+        
+        if render:
+            env.render()
+            time.sleep(SLEEP)
 
         if all_done:
-            reason = "time_limit" if any(truncations.values()) else "task_solved"
-            #print(f"Episode ended at t={t} due to {reason}")
+            # Heuristic: capture => at least one True in terminations
+            if any(terminations.values()):
+                captured = True
+                # t is 0-based index of this step, so steps taken = t+1
+                steps_to_capture = t + 1
+                reason = "task_solved"
+            else:
+                reason = "time_limit"
             observer.on_episode_end(reason)
             break
+        
+    if not all_done:
+        # Horizon hit without env signalling all_done
+        if any(terminations.values()):
+            captured = True
+            steps_to_capture = time_horizon
+        else:
+            captured = False
+            steps_to_capture = None   
 
     print(f"[INFO] Episode finished after {t} steps")
     
     grid_size = env.unwrapped.model.grid_size if hasattr(env.unwrapped.model, "grid_size") else (10, 10)
     env.close()
+    if save_plot_trajectories_each_episode:
+        os.makedirs("figures", exist_ok=True)
+        plot_path = f"figures/trajectories_seed_{seed}.png"
+        plot_trajectories(position_history, grid_size, save_path=plot_path)
+        print("[INFO] Saved trajectory plot to figures/trajectories_seed_{seed}.png")
     
-    plot_trajectories(position_history, grid_size, save_path="figures/final_positions.png")
-    print("[INFO] Saved trajectory plot to figures/final_positions.png")
+    return captured, steps_to_capture
+    
+
+def main():
+    """
+    Run multiple POSGGym Predator-Prey episodes with GTPyhop HTN planner,
+    report average capture time, and plot per-run capture time.
+    
+    Capture Criteria:
+    Prey are captured when at least prey_strength predators are in adjacent cells, 
+    where 1 <= prey_strength <= min(4, num_predators).
+    """
+    # Parse command line arguments
+    parser = argparse.ArgumentParser(description="Run POSGGym Predator-Prey with GTPyhop HTN planner.")
+    parser.add_argument("--debug", action="store_true", help="Enable debug mode with verbose logging.")
+    parser.add_argument("--keep-prev-action", dest="keep_prev_action", action="store_true",
+                        help="When patrolling, allow repeating the previous action.")
+    parser.add_argument("--no-keep-prev-action", dest="keep_prev_action", action="store_false",
+                        help="When patrolling, exclude the previous action if alternatives exist.")
+    parser.add_argument("--time-horizon", type=int, default=200, help="Maximum number of steps per episode.")
+    parser.add_argument("--num-episodes", type=int, default=1, help="Number of episodes to run.")
+    parser.add_argument("--render-last", action="store_true", help="Render the last episode visually.")
+    
+    
+    parser.set_defaults(keep_prev_action=True)
+    args = parser.parse_args()
+    
+    debug = args.debug
+    keep_prev_action = args.keep_prev_action
+    time_horizon=args.time_horizon
+    num_episodes=args.num_episodes
+    
+    # Data structures for metrics
+    capture_times = []
+    all_times = []
+    successes=0
+    
+    for run_idx in range(num_episodes):
+        seed = 42 + run_idx  # different seed per run
+
+        render = args.render_last and (run_idx == num_episodes - 1)
+
+        if debug:
+            print(f"\n[INFO] === Run {run_idx+1}/{num_episodes}, seed={seed} ===")
+
+        captured, steps = run_single_episode(
+            seed=seed,
+            time_horizon=time_horizon,
+            debug=debug,
+            keep_prev_action=keep_prev_action,
+            render=render,
+        )
+
+        if captured:
+            successes += 1
+            capture_times.append(steps)
+        # For all_times, treat failures as horizon
+        all_times.append(steps if steps is not None else time_horizon)
+
+    # ---- Print stats ----
+    print("\n================ RESULTS ================")
+    print(f"Total runs:           {num_episodes}")
+    print(f"Successful captures:  {successes}")
+    print(f"Success rate:         {successes / num_episodes:.3f}")
+
+    if capture_times:
+        avg_capture_time = sum(capture_times) / len(capture_times)
+        print(f"Avg steps to capture (successful episodes only): {avg_capture_time:.2f}")
+    else:
+        avg_capture_time = None
+        print("No captures occurred; cannot compute average capture time.")
+
+    avg_steps_all = sum(all_times) / len(all_times)
+    print(f"Avg steps per episode (including failures):      {avg_steps_all:.2f}")
+    print("=========================================\n")
+    
+    # ---- Call the centralized plotting function ----
+    plot_capture_statistics(
+        all_times=all_times,
+        capture_times=capture_times,
+        avg_capture_time=avg_capture_time,
+        avg_steps_all=avg_steps_all,
+        save_dir="figures",
+    )
+    
     
 
 
