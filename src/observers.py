@@ -4,7 +4,7 @@ from typing import Dict, Tuple, Any
 # cell codes in Predator-Prey
 EMPTY, WALL, PREDATOR, PREY = 0, 1, 2, 3
 
-class HelloObserver:
+class MinimalObserver:
     """
     Minimal observer that 'receives' per-agent observations each step and prints
     a compact summary. Great for smoke tests or wiring a planner later.
@@ -24,6 +24,7 @@ class HelloObserver:
         self.obs_dim = env.unwrapped.model.obs_dim
         size = 2 * self.obs_dim + 1
         print(f"[observer] reset: agents={env.agents}, obs_dim={self.obs_dim} (window {size}x{size})")
+        print(f"[observer] reset: # of predators required to capture each prey: {env.unwrapped.model.prey_strength}")
 
         # (optional) show initial obs summary
         self._print_obs_summary(observations)

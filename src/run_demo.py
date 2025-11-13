@@ -14,12 +14,14 @@ import posggym.envs.grid_world.predator_prey as pp
 from gymnasium.wrappers import RecordVideo
 
 from wrappers import ActionLoggingWrapper
-from observers import HelloObserver
+from observers import MinimalObserver
 
 import gtpyhop
 from pp_htn import (
     domain_name, DO_NOTHING, UP, DOWN, LEFT, RIGHT, PRED, PREY, EMPTY
 )
+
+from plot_utils import plot_trajectories, record_positions
 
 #KEEP_PREV_ACTION = True  # whether to prefer continuing in same direction when patrolling (planner uses this)
 
@@ -58,22 +60,42 @@ def build_planner_state(env, observations):
     return s
 
 def main():
+    """
+    Run POSGGym Predator-Prey with GTPyhop HTN planner.
+    
+    Capture Criteria:
+    Prey are captured when at least prey_strength predators are in adjacent cells, 
+    where 1 <= prey_strength <= min(4, num_predators).
+    """
+    # Parse command line arguments
     parser = argparse.ArgumentParser(description="Run POSGGym Predator-Prey with GTPyhop HTN planner.")
     parser.add_argument("--debug", action="store_true", help="Enable debug mode with verbose logging.")
     parser.add_argument("--keep-prev-action", dest="keep_prev_action", action="store_true",
                         help="When patrolling, allow repeating the previous action.")
     parser.add_argument("--no-keep-prev-action", dest="keep_prev_action", action="store_false",
                         help="When patrolling, exclude the previous action if alternatives exist.")
+    parser.add_argument("--time-horizon", type=int, default=200, help="Maximum number of steps per episode.")
+    
     parser.set_defaults(keep_prev_action=True)
     args = parser.parse_args()
     
     debug = args.debug
     KEEP_PREV_ACTION = args.keep_prev_action
     #print("Testing environment creation...")
-    time_horizon=200
+    
+    # Environment parameters
+    time_horizon=args.time_horizon
     TARGET_FPS = 5
     SLEEP = 1.0 / TARGET_FPS
     
+    
+    """Create POSGGym Predator-Prey environment.
+    prey_strength - how many predators are required to capture each prey,
+    minimum is 1 and maximum is min(4, num_predators). 
+    If None this is set to min(4, num_predators) (default = ‘None`)
+    
+    Note: if time_horizon is > max_episode_steps, env will terminate early at max_episode_steps
+    """
     env = posggym.make(
         "PredatorPrey-v0",
         max_episode_steps=200,
@@ -82,6 +104,7 @@ def main():
         num_prey=1,
         render_mode= "human" ,
     )
+    # Instantiate environment with action logging wrapper that has more detailed logging
     env = ActionLoggingWrapper(env, debug=debug)
     #env = RecordVideo(env, video_folder="./videos/", name_prefix="pred_prey", episode_trigger=lambda x: True)
    
@@ -90,8 +113,13 @@ def main():
         print(f"[DEBUG] Printing GTPyhop Domain")
         gtpyhop.print_domain()
     
-   
+    
     observations, infos = env.reset(seed=42)
+    
+    position_history = {"predators" : {}, "prey" : {} }
+    record_positions(env, position_history, init=True)
+    
+        
     # Per-agent persistent memory lives OUTSIDE GTPyhop/state
     agent_ids = list(env.agents)
     agent_memory = {
@@ -113,7 +141,7 @@ def main():
         print("=========================")
         
         
-    observer = HelloObserver(pretty=False)
+    observer = MinimalObserver(pretty=False)
     observer.on_reset(env, observations,infos)
     
     
@@ -149,6 +177,9 @@ def main():
         # step environment
         observations, rewards, terminations, truncations, all_done, infos = env.step(actions)
         
+        # Record all positions for prey and predators for plotting
+        record_positions(env, position_history)
+        
         observer.on_step(t, observations, rewards, terminations, truncations, infos)
         
         # Persist last executed action
@@ -176,7 +207,12 @@ def main():
             break
 
     print(f"[INFO] Episode finished after {t} steps")
+    
+    grid_size = env.unwrapped.model.grid_size if hasattr(env.unwrapped.model, "grid_size") else (10, 10)
     env.close()
+    
+    plot_trajectories(position_history, grid_size, save_path="figures/final_positions.png")
+    print("[INFO] Saved trajectory plot to figures/final_positions.png")
     
 
 
