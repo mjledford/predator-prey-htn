@@ -9,6 +9,8 @@ import posggym
 # actions: 0=STAY, 1=UP, 2=DOWN, 3=LEFT, 4=RIGHT (per this env)
 # obs cells: 0=EMPTY, 1=WALL, 2=PREDATOR, 3=PREY
 
+# seed = 42 for 
+
 import posggym.envs.grid_world.predator_prey as pp
 
 from gymnasium.wrappers import RecordVideo
@@ -16,117 +18,30 @@ from gymnasium.wrappers import RecordVideo
 from wrappers import ActionLoggingWrapper
 from observers import MinimalObserver
 
-import gtpyhop
-from pp_htn import (
-    domain_name, DO_NOTHING, UP, DOWN, LEFT, RIGHT, PRED, PREY, EMPTY
+from plan_utils import (
+    plan_to_actions,
+    joint_plan_to_actions,
+    build_planner_state,
 )
 
-from plot_utils import plot_trajectories, record_positions
+
+import pp_htn
+
+import gtpyhop
+
+from constants import (
+    DO_NOTHING, UP, DOWN, LEFT, RIGHT,
+    EMPTY, WALL, PRED, PREY,
+    DIRS, ORDERED_DIRS, ACTION_NAMES
+)
+
+from plot_utils import plot_trajectories, record_positions, plot_capture_statistics
 import matplotlib.pyplot as plt
-#KEEP_PREV_ACTION = True  # whether to prefer continuing in same direction when patrolling (planner uses this)
 
 
 #print(pp.__file__)
 
-ACTION_NAMES = {
-    0: "STAY",
-    1: "UP",
-    2: "DOWN",
-    3: "LEFT",
-    4: "RIGHT",
-}
 
-def plot_capture_statistics(
-    all_times,
-    capture_times,
-    avg_capture_time,
-    avg_steps_all,
-    save_dir="figures",
-):
-    """
-    Create plots summarizing capture performance across runs.
-
-    Parameters
-    ----------
-    all_times : list[int]
-        Steps until capture or time_horizon for every run.
-    capture_times : list[int]
-        Steps until capture for successful runs only.
-    avg_capture_time : float or None
-        Mean capture time (successful episodes only).
-    avg_steps_all : float
-        Mean steps across ALL runs.
-    save_dir : str
-        Directory where figures will be saved.
-    """
-    os.makedirs(save_dir, exist_ok=True)
-    num_runs = len(all_times)
-    x = list(range(1, num_runs + 1))
-
-    # --- Plot 1: per-run capture times ---
-    plt.figure()
-    plt.plot(x, all_times, marker="o", linestyle="-", label="Per-run steps")
-
-    if avg_capture_time is not None:
-        plt.axhline(
-            y=avg_capture_time,
-            linestyle="--",
-            color="red",
-            label=f"Mean (captures only) = {avg_capture_time:.1f}",
-        )
-
-    plt.axhline(
-        y=avg_steps_all,
-        linestyle=":",
-        color="green",
-        label=f"Mean (all episodes) = {avg_steps_all:.1f}",
-    )
-
-    plt.xlabel("Run index")
-    plt.ylabel("Steps until capture / horizon")
-    plt.title("Predator-Prey: Time to Capture over Multiple Runs")
-    plt.grid(True)
-    plt.legend()
-
-    out1 = os.path.join(save_dir, "time_to_capture_per_run.png")
-    plt.savefig(out1, bbox_inches="tight")
-    print(f"[INFO] Saved: {out1}")
-
-    # --- Plot 2: histogram of capture times (successful only) ---
-    if capture_times:
-        plt.figure()
-        plt.hist(capture_times, bins=20, color="steelblue", edgecolor="black")
-        plt.xlabel("Steps to capture")
-        plt.ylabel("Frequency")
-        plt.title("Distribution of Capture Times (Successful Episodes)")
-        plt.grid(True)
-
-        out2 = os.path.join(save_dir, "capture_time_hist.png")
-        plt.savefig(out2, bbox_inches="tight")
-        print(f"[INFO] Saved: {out2}")
-
-def plan_to_actions(plan):
-    """Plan should be in the list[tuple] for: [('do', 0, 4)] --> agent 0 do action 4"""
-    if not plan:
-        return DO_NOTHING
-    op, aid, act = plan[0]
-    return int(act)
-    # for op, aid, act in plan:
-    #     return act
-    
-
-def my_policy(obs, agent_id):
-    """A very simple policy for testing purposes."""
-    # Move up
-    return 1
-
-def build_planner_state(env, observations):
-    """Build a GTPyhop state from the current environment observations."""
-    s = gtpyhop.State("tick")
-    s.obs = {agent_id: observations[agent_id] for agent_id in env.agents }
-    s.obs_dim = env.unwrapped.model.obs_dim
-    
-    return s
 
 def run_single_episode(
     seed: int,
@@ -169,8 +84,12 @@ def run_single_episode(
         print(f"[DEBUG] Printing GTPyhop Domain")
         gtpyhop.print_domain()
     
-    
-    observations, infos = env.reset(seed=42)
+    # seed = 42 for reproducible run where the prey is captured around cell (10,9)
+    # seed = 43 is a run where the agents get stuck in the top right and don't move
+    observations, infos = env.reset(seed=seed)
+    captured = False
+    steps_to_capture = None
+    all_done = False
     
     position_history = {"predators" : {}, "prey" : {} }
     record_positions(env, position_history, init=True)
@@ -180,7 +99,7 @@ def run_single_episode(
     agent_ids = list(env.agents)
     agent_memory = {
         aid: {
-            "rng": random.Random(100 + i),
+            "rng": random.Random(seed * 1000 + i),
             "prev_action": DO_NOTHING,
             "last_seen_prey": None,
         }
@@ -210,16 +129,29 @@ def run_single_episode(
         # 
         actions = {}
         
-        # Controller calls planner for each agent 
-        for agent_id in env.agents:
-            s.rng = agent_memory[agent_id]["rng"]
-            # Inject memory + flags into state for planner use
-            s.prev_action = agent_memory[agent_id]["prev_action"]
-            s.keep_prev_action = keep_prev_action
+        # Unified state conventions:
+        # Inject per-agent memory so joint methods can use it
+        s.prev_actions = {aid: agent_memory[aid]["prev_action"] for aid in agent_ids}
+        s.keep_prev_action = keep_prev_action
+        s.rngs = {aid: agent_memory[aid]["rng"] for aid in agent_ids}
+        s.agent_ids = agent_ids
+
+        # ---- Joint Planning: single HTN call ----
+        plan = gtpyhop.find_plan(s, [("choose_joint_action", tuple(agent_ids))])
+        actions = joint_plan_to_actions(plan, agent_ids)
+        
+        # Controller calls planner for each agent (Non Cooperative)
+        # for agent_id in env.agents:
+        #     s.rng = agent_memory[agent_id]["rng"]
+        #     # Inject memory + flags into state for planner use
+        #     s.prev_action = agent_memory[agent_id]["prev_action"]
+        #     s.keep_prev_action = keep_prev_action
+        #     #s.agent_ids = agent_ids
 
            
-            plan = gtpyhop.find_plan(s, [("choose_action", agent_id)])
-            actions[agent_id] = plan_to_actions(plan)
+        #     #plan = gtpyhop.find_plan(s, [("choose_action", agent_id)])
+        #     plan = gtpyhop.find_plan(s, [("choose_action", agent_id)])
+        #     actions[agent_id] = plan_to_actions(plan)
             
         
         if debug:
@@ -269,7 +201,7 @@ def run_single_episode(
             captured = False
             steps_to_capture = None   
 
-    print(f"[INFO] Episode finished after {t} steps")
+    print(f"[INFO] Episode finished after {t} steps: [SEED={seed}]")
     
     grid_size = env.unwrapped.model.grid_size if hasattr(env.unwrapped.model, "grid_size") else (10, 10)
     env.close()
@@ -301,6 +233,8 @@ def main():
     parser.add_argument("--time-horizon", type=int, default=200, help="Maximum number of steps per episode.")
     parser.add_argument("--num-episodes", type=int, default=1, help="Number of episodes to run.")
     parser.add_argument("--render-last", action="store_true", help="Render the last episode visually.")
+    parser.add_argument("--seed", type=int, default=None, help="Global experiment seed (optional). If not set, seeds vary per episode.")
+    parser.add_argument("--rerun-seed", type=int, default=None, help="Run exactly one episode with this seed (overrides num-episodes and base seed).")
     
     
     parser.set_defaults(keep_prev_action=True)
@@ -316,11 +250,45 @@ def main():
     all_times = []
     successes=0
     
+    # ---- Print configuration summary ----
+    print("\n================ RUN CONFIG ================")
+    print(f"Episodes:              {num_episodes}")
+    print(f"Time horizon:          {time_horizon}")
+    print(f"Grid:                  10x10")            # fixed 
+    print(f"Predators:             2")                # fixed
+    print(f"Prey:                  1")                # fixed
+    print(f"Planner:               Joint HTN (choose_joint_action)")
+    print(f"Keep previous action:  {keep_prev_action}")
+    print(f"Debug mode:            {debug}")
+    print(f"Render last episode:   {args.render_last}")
+    print("============================================\n")
+    
+    # If rerun-seed is given, do that and exit early.
+    if args.rerun_seed is not None:
+        print(f"[INFO] Re-running single episode with seed {args.rerun_seed}")
+        run_single_episode(
+            seed=args.rerun_seed,
+            time_horizon=time_horizon,
+            debug=debug,
+            keep_prev_action=keep_prev_action,
+            render=True,
+        )
+        return
+
+    # Otherwise, normal multi-episode run: set up base_seed
+    if args.seed is not None:
+        base_seed = args.seed
+        print(f"[INFO] Using fixed base seed: {base_seed}")
+    else:
+        base_seed = random.randint(0, 10**6)
+        print(f"[INFO] No seed provided. Using random base seed: {base_seed}")
+    
     for run_idx in range(num_episodes):
-        seed = 42 + run_idx  # different seed per run
-
-        render = args.render_last and (run_idx == num_episodes - 1)
-
+        #seed = 42 + run_idx  # different seed per run
+        seed = base_seed + run_idx
+        
+        #render = args.render_last and (run_idx == num_episodes - 1)
+        render = True
         if debug:
             print(f"\n[INFO] === Run {run_idx+1}/{num_episodes}, seed={seed} ===")
 

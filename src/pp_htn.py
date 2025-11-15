@@ -1,29 +1,28 @@
 import gtpyhop
 import random
 
-random.seed(42)  # for reproducibility
-# env action ids
-DO_NOTHING, UP, DOWN, LEFT, RIGHT = 0, 1, 2, 3, 4
 
-# local observation cell codes
-EMPTY, WALL, PRED, PREY = 0, 1, 2, 3
 
-# offsets for neighbors in the obs window (dx, dy)
-# if agent is at (X,Y), then neighbor at (X+dx, Y+dy)
-# Note: +x is right, +y is down
-# For example (5x5 observation window), if agent is at (2,2) then UP target cell/neighbor is at (2,1), DOWN (2,3), LEFT (1,2), RIGHT (3,2)
-DIRS = {
-    UP:    (0, -1),
-    DOWN:  (0, 1),
-    LEFT:  (-1, 0),
-    RIGHT: (1, 0),
-}
+from constants import (
+    DO_NOTHING, UP, DOWN, LEFT, RIGHT,
+    EMPTY, WALL, PRED, PREY,
+    DIRS, ORDERED_DIRS
+)
 
-ORDERED_DIRS = [UP, DOWN, LEFT, RIGHT]
+from pp_behavior import (
+    action_from_obs,
+    legal_moves_from_obs,
+    find_global_leader,
+    choose_leader_action,
+    choose_helper_action,
+    choose_patrol_action,
+)
 
 DEBUG = False
 
-# primitive action
+# ----------------------------------------------------------------------
+# Primitive action
+# ----------------------------------------------------------------------
 def do(state, agent_id, action_id):
     """
     Record the chosen discrete action for agent_id
@@ -34,128 +33,102 @@ def do(state, agent_id, action_id):
     state.last_action[agent_id] = int(action_id)
     return state # returning the (modified) state signals success
 
-# helper function to pick action from local obs
-def action_from_obs(obs, obs_dim):
-    """
-    Greedy chase if any PREY cells visible in local obs window;
-    """
-    size = 2 * obs_dim + 1
-    center = obs_dim
 
-    # find all visible prey cells in the (2*obs_dim+1)^2 egocentric window
-    prey_idxs = [k for k, v in enumerate(obs) if v == PREY]
-    # if none visible, do nothing
-    if not prey_idxs:
-        return DO_NOTHING  
 
-    # pick the nearest prey by Manhattan distance
-    best_md = 10**9
-    best_dx = 0
-    best_dy = 0
-    for k in prey_idxs:
-        r, c = divmod(k, size)
-        dx = c - center         # +x = right
-        dy = r - center         # +y = down
-        md = abs(dx) + abs(dy)  
-        if md < best_md:
-            best_md = md
-            best_dx, best_dy = dx, dy
 
-    dx, dy = best_dx, best_dy   
-
-    # move greedily to reduce distance; break ties horizontally
-    if abs(dx) >= abs(dy):
-        if dx > 0:  return RIGHT
-        if dx < 0:  return LEFT
-        if dy > 0:  return DOWN
-        if dy < 0:  return UP
-        return DO_NOTHING
-    else:
-        if dy > 0:  return DOWN
-        if dy < 0:  return UP
-        if dx > 0:  return RIGHT
-        if dx < 0:  return LEFT
-        return DO_NOTHING
-
-def legal_moves_from_obs(obs, obs_dim):
-    """
-    Given local obs, return list of legal move action_ids (no WALL)
-    """
-    size = 2 * obs_dim + 1
-    center = obs_dim
-    legal_moves = []
-    for a in ORDERED_DIRS:
-        dx, dy = DIRS[a]
-        nx, ny = center + dx, center + dy
-        # bounds check (should always be in-bounds for local obs window)
-        if not (0 <=nx < size and 0 <= ny < size):
-            continue
-        idx = ny * size + nx
-        if obs[idx] != WALL:
-            legal_moves.append(a)
-    return legal_moves
-
+# ----------------------------------------------------------------------
+# Legacy single-agent HTN methods (baseline, not used in joint planner)
+# ----------------------------------------------------------------------
 def _default_fallback_action():
     return DO_NOTHING
 
 def _default_fallback_plan(agent_id):
-    return [("do", agent_id, DO_NOTHING)]     
-# METHODS for 'choose_action'
+    return [("do", agent_id, DO_NOTHING)]  
 
+   
+# METHODS for 'choose_action'
 def m_chase_if_visible(state, agent_id):
-    """If prey visible in local obs, chase it; else fail so next method can try"""
-    
+    """
+    Legacy single-agent method:
+    If prey visible in local obs, chase it; else fail so next method can try.
+    """
     if DEBUG:
-        print("[DEBUG] Chase (prey visible)")
-        
+        print("[DEBUG] [legacy] Chase (prey visible)")
+
     obs = state.obs[agent_id]
     action = action_from_obs(obs, state.obs_dim)
     if action == DO_NOTHING:
         return False
-    print(f"[INFO] Agent {agent_id} attempting to chase prey with action {action}")
+
+    if DEBUG:
+        print(f"[DEBUG] [legacy] Agent {agent_id} chase action {action}")
     return [("do", agent_id, action)]
 
 def m_patrol_if_not_visible(state, agent_id):
     """
-    Fallback patrol:
-    - compute legal directions (not into WALL)
-    - optionally include or exclude the last executed action (prev_action)
-      depending on the boolean flag state.keep_prev_action
-    - pick uniformly at random among remaining legal directions
+    Legacy single-agent patrol using the shared choose_patrol_action helper.
+    Uses unified state conventions: state.prev_actions, state.keep_prev_action, state.rngs.
     """
     if DEBUG:
-        print(f"[DEBUG] Patrol (prey not visible)")
-    
-    obs = state.obs[agent_id]
-    # smart planner determines legal moves from local obs (don't go left if the wall is left, therefore choose up, down, right aka legal moves)
-    legal_moves = legal_moves_from_obs(obs, state.obs_dim)
-    
-    if not legal_moves:
-        return _default_fallback_plan(agent_id) # default = [("do", agent_id, DO_NOTHING)]
-    
-    prev = getattr(state, "prev_action", DO_NOTHING)
-    keep_prev = bool(getattr(state, "keep_prev_action", True))
-    
-    if not keep_prev and prev in legal_moves:
-        # user requested to to filter out the previous direction if possible
-        filtered = [a for a in legal_moves if a != prev]
-        if filtered:
-            legal_moves = filtered
-    
-    
-    rng = getattr(state, "rng", random)
-    
-    # Choose default RIGHT (original progress report 1 basic action to move right)
-    #action = RIGHT
-    # Choose randomly among legal moves
-    action = rng.choice(legal_moves)
-    print(f"[INFO] Agent {agent_id} attempting to patrol with action {action}")
-    
+        print(f"[DEBUG] [legacy] Patrol (prey not visible)")
+
+    action = choose_patrol_action(state, agent_id)
     return [("do", agent_id, action)]
 
+# ----------------------------------------------------------------------
+# Joint HTN method (this is what you actually use)
+# ----------------------------------------------------------------------
+def m_choose_joint_action(state, agent_ids):
+    """
+    Joint HTN method:
+      - If any predator sees prey:
+          * pick a leader (closest to prey)
+          * leader chases
+          * helpers coordinate based on leader
+      - Else:
+          * everyone patrols using shared patrol logic.
+    """
+    obs_dict = state.obs
+    obs_dim = state.obs_dim
 
-# REGISTER domain
+    subtasks = []
+
+    # 1) Leader selection
+    leader, dx, dy = find_global_leader(obs_dict, agent_ids, obs_dim)
+
+    if leader is not None:
+        # Prey visible: leader + helpers
+        leader_action = choose_leader_action(state, leader)
+        subtasks.append(("do", leader, leader_action))
+
+        for aid in agent_ids:
+            if aid == leader:
+                continue
+            helper_action = choose_helper_action(state, aid, leader_action)
+            subtasks.append(("do", aid, helper_action))
+
+    else:
+        # No prey visible: each agent patrols
+        for aid in agent_ids:
+            a = choose_patrol_action(state, aid)
+            subtasks.append(("do", aid, a))
+
+    return subtasks
+
+# ----------------------------------------------------------------------
+# Domain registration
+# ----------------------------------------------------------------------
 domain_name = "pp_htn"
+
+# Importing this module will create and register the "pp_htn" domain.
 gtpyhop.Domain(domain_name)
 gtpyhop.declare_actions(do)
-gtpyhop.declare_task_methods("choose_action", m_chase_if_visible, m_patrol_if_not_visible)
+
+
+# Progress Report 1: Individual actions
+# Legacy single-agent API (keep as baseline, currently NOT used by run_demo):
+#gtpyhop.declare_task_methods("choose_action", m_chase_if_visible, m_patrol_if_not_visible)
+
+# Progress Report 2: Joint actions
+# Joint planner API (this is what run_demo should call):
+gtpyhop.declare_task_methods( "choose_joint_action", m_choose_joint_action)

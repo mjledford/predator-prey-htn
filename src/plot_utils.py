@@ -93,3 +93,72 @@ def plot_trajectories(position_history, grid_size=(10, 10), save_path="figures/f
     plt.tight_layout()
     plt.savefig(save_path)
     plt.close()
+
+def plot_capture_statistics(
+    all_times,
+    capture_times,
+    avg_capture_time,
+    avg_steps_all,
+    save_dir="figures",
+):
+    """
+    Create plots summarizing capture performance across runs.
+
+    Parameters
+    ----------
+    all_times : list[int]
+        Steps until capture or time_horizon for every run.
+    capture_times : list[int]
+        Steps until capture for successful runs only.
+    avg_capture_time : float or None
+        Mean capture time (successful episodes only).
+    avg_steps_all : float
+        Mean steps across ALL runs.
+    save_dir : str
+        Directory where figures will be saved.
+    """
+    os.makedirs(save_dir, exist_ok=True)
+    num_runs = len(all_times)
+    x = list(range(1, num_runs + 1))
+
+    # --- Plot 1: per-run capture times ---
+    plt.figure()
+    plt.plot(x, all_times, marker="o", linestyle="-", label="Per-run steps")
+
+    if avg_capture_time is not None:
+        plt.axhline(
+            y=avg_capture_time,
+            linestyle="--",
+            color="red",
+            label=f"Mean (captures only) = {avg_capture_time:.1f}",
+        )
+
+    plt.axhline(
+        y=avg_steps_all,
+        linestyle=":",
+        color="green",
+        label=f"Mean (all episodes) = {avg_steps_all:.1f}",
+    )
+
+    plt.xlabel("Run index")
+    plt.ylabel("Steps until capture / horizon")
+    plt.title("Predator-Prey: Time to Capture over Multiple Runs")
+    plt.grid(True)
+    plt.legend()
+
+    out1 = os.path.join(save_dir, "time_to_capture_per_run.png")
+    plt.savefig(out1, bbox_inches="tight")
+    print(f"[INFO] Saved: {out1}")
+
+    # --- Plot 2: histogram of capture times (successful only) ---
+    if capture_times:
+        plt.figure()
+        plt.hist(capture_times, bins=20, color="steelblue", edgecolor="black")
+        plt.xlabel("Steps to capture")
+        plt.ylabel("Frequency")
+        plt.title("Distribution of Capture Times (Successful Episodes)")
+        plt.grid(True)
+
+        out2 = os.path.join(save_dir, "capture_time_hist.png")
+        plt.savefig(out2, bbox_inches="tight")
+        print(f"[INFO] Saved: {out2}")
