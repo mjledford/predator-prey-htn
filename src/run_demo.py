@@ -38,17 +38,21 @@ from constants import (
 from plot_utils import plot_trajectories, record_positions, plot_capture_statistics
 import matplotlib.pyplot as plt
 
+from comm_module import HTNCommModule
+
 
 #print(pp.__file__)
 
 
 
-def run_single_episode(
+def run_single_episode (
     seed: int,
     time_horizon: int = 200,
     debug: bool = False,
     keep_prev_action: bool = True,
-    render: bool = False ):
+    render: bool = False,
+    comm_mode: str = "full",
+    k_sync: int = 5):
     """
     Run one Predator-Prey episode and return:
         captured (bool): whether prey was captured
@@ -67,7 +71,7 @@ def run_single_episode(
     Note: if time_horizon is > max_episode_steps, env will terminate early at max_episode_steps
     """
     save_plot_trajectories_each_episode = False
-    env = posggym.make(
+    env = posggym.make (
         "PredatorPrey-v0",
         max_episode_steps=time_horizon,  # keep aligned with horizon
         grid="10x10",
@@ -106,6 +110,8 @@ def run_single_episode(
         for i, aid in enumerate(agent_ids)
     }
     
+    controller = HTNCommModule(mode=comm_mode, k_sync=k_sync, debug=debug)
+    
     if debug:
         print("=========================")
         print(f"[DEBUG] Starting episode with agents: {env.agents}")
@@ -123,22 +129,31 @@ def run_single_episode(
     
 
     for t in range(time_horizon):
+        # Ask comm module to handle communication + planning + joint action
+        actions = controller.decide_actions(
+            t=t,
+            env=env,
+            observations=observations,
+            agent_memory=agent_memory,
+            keep_prev_action=keep_prev_action,
+        )
+        
         # Build a GTPyhop state with exactly the methods we need
-        s = build_planner_state(env, observations)
+        # s = build_planner_state(env, observations)
         
-        # 
-        actions = {}
+        # # 
+        # actions = {}
         
-        # Unified state conventions:
-        # Inject per-agent memory so joint methods can use it
-        s.prev_actions = {aid: agent_memory[aid]["prev_action"] for aid in agent_ids}
-        s.keep_prev_action = keep_prev_action
-        s.rngs = {aid: agent_memory[aid]["rng"] for aid in agent_ids}
-        s.agent_ids = agent_ids
+        # # Unified state conventions:
+        # # Inject per-agent memory so joint methods can use it
+        # s.prev_actions = {aid: agent_memory[aid]["prev_action"] for aid in agent_ids}
+        # s.keep_prev_action = keep_prev_action
+        # s.rngs = {aid: agent_memory[aid]["rng"] for aid in agent_ids}
+        # s.agent_ids = agent_ids
 
-        # ---- Joint Planning: single HTN call ----
-        plan = gtpyhop.find_plan(s, [("choose_joint_action", tuple(agent_ids))])
-        actions = joint_plan_to_actions(plan, agent_ids)
+        # # ---- Joint Planning: single HTN call ----
+        # plan = gtpyhop.find_plan(s, [("choose_joint_action", tuple(agent_ids))])
+        # actions = joint_plan_to_actions(plan, agent_ids)
         
         # Controller calls planner for each agent (Non Cooperative)
         # for agent_id in env.agents:
@@ -202,16 +217,19 @@ def run_single_episode(
             steps_to_capture = None   
 
     print(f"[INFO] Episode finished after {t} steps: [SEED={seed}]")
+    print(f"[INFO] Comm stats: messages={controller.stats.messages}, replans={controller.stats.replans}")
+
     
     grid_size = env.unwrapped.model.grid_size if hasattr(env.unwrapped.model, "grid_size") else (10, 10)
     env.close()
+    
     if save_plot_trajectories_each_episode:
         os.makedirs("figures", exist_ok=True)
         plot_path = f"figures/trajectories_seed_{seed}.png"
         plot_trajectories(position_history, grid_size, save_path=plot_path)
         print("[INFO] Saved trajectory plot to figures/trajectories_seed_{seed}.png")
     
-    return captured, steps_to_capture
+    return captured, steps_to_capture, controller.stats
     
 
 def main():
@@ -235,6 +253,8 @@ def main():
     parser.add_argument("--render-last", action="store_true", help="Render the last episode visually.")
     parser.add_argument("--seed", type=int, default=None, help="Global experiment seed (optional). If not set, seeds vary per episode.")
     parser.add_argument("--rerun-seed", type=int, default=None, help="Run exactly one episode with this seed (overrides num-episodes and base seed).")
+    parser.add_argument("--comm-mode", type=str, default="full", choices=["full", "periodic", "event"], help="Communication mode between agents and planner.")
+    parser.add_argument("--k-sync", type=int, default=5, help="Synchronization interval for periodic communication (comm-mode=periodic).")
     
     
     parser.set_defaults(keep_prev_action=True)
@@ -244,11 +264,15 @@ def main():
     keep_prev_action = args.keep_prev_action
     time_horizon=args.time_horizon
     num_episodes=args.num_episodes
+    comm_mode = args.comm_mode
+    k_sync = args.k_sync
     
     # Data structures for metrics
     capture_times = []
     all_times = []
     successes=0
+    total_messages = 0
+    total_replans = 0
     
     # ---- Print configuration summary ----
     print("\n================ RUN CONFIG ================")
@@ -261,6 +285,8 @@ def main():
     print(f"Keep previous action:  {keep_prev_action}")
     print(f"Debug mode:            {debug}")
     print(f"Render last episode:   {args.render_last}")
+    print(f"Comm mode:            {comm_mode}")
+    print(f"k_sync (periodic):    {k_sync}")
     print("============================================\n")
     
     # If rerun-seed is given, do that and exit early.
@@ -272,6 +298,8 @@ def main():
             debug=debug,
             keep_prev_action=keep_prev_action,
             render=True,
+            comm_mode=comm_mode,
+            k_sync=k_sync
         )
         return
 
@@ -292,14 +320,16 @@ def main():
         if debug:
             print(f"\n[INFO] === Run {run_idx+1}/{num_episodes}, seed={seed} ===")
 
-        captured, steps = run_single_episode(
+        captured, steps, stats = run_single_episode(
             seed=seed,
             time_horizon=time_horizon,
             debug=debug,
             keep_prev_action=keep_prev_action,
             render=render,
         )
-
+        total_messages += stats.messages
+        total_replans += stats.replans
+        
         if captured:
             successes += 1
             capture_times.append(steps)
@@ -320,7 +350,11 @@ def main():
         print("No captures occurred; cannot compute average capture time.")
 
     avg_steps_all = sum(all_times) / len(all_times)
+    avg_messages = total_messages / num_episodes
+    avg_replans = total_replans / num_episodes
     print(f"Avg steps per episode (including failures):      {avg_steps_all:.2f}")
+    print(f"Avg messages per episode:  {avg_messages:.2f}")
+    print(f"Avg replans per episode:   {avg_replans:.2f}")
     print("=========================================\n")
     
     # ---- Call the centralized plotting function ----

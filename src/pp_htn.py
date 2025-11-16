@@ -76,7 +76,7 @@ def m_patrol_if_not_visible(state, agent_id):
     return [("do", agent_id, action)]
 
 # ----------------------------------------------------------------------
-# Joint HTN method (this is what you actually use)
+# Joint HTN method (this is what we actually use)
 # ----------------------------------------------------------------------
 def m_choose_joint_action(state, agent_ids):
     """
