@@ -33,66 +33,77 @@ def record_positions(env, position_history, init=False):
 
 def plot_trajectories(position_history, grid_size=(10, 10), save_path="figures/final_positions.png"):
     """
-    Plot predator and prey trajectories with unique colors per agent.
-    Works for any number of predators or prey.
+    Plot predator and prey trajectories with fixed colors:
+        Predator 0 -> green
+        Predator 1 -> blue
+        Prey -> red
 
-    Args:
-        position_history (dict):
-            {
-                "predators": {id: [(x0, y0), ...]},
-                "prey":      {id: [(x0, y0), ...]}
-            }
-        grid_size (tuple): (width, height)
-        save_path (str): where to save the figure
+    Final positions are highlighted with large markers.
     """
     os.makedirs(os.path.dirname(save_path), exist_ok=True)
     width, height = grid_size
     plt.figure(figsize=(6, 6))
 
-    # Combine all agent IDs for unique color assignment
     predator_ids = list(position_history["predators"].keys())
     prey_ids = list(position_history["prey"].keys())
-    total_agents = len(predator_ids) + len(prey_ids)
 
-    # Use a categorical colormap (distinct colors)
-    cmap = cm.get_cmap("tab20", total_agents)  # tab20 gives 20 distinct colors
+    # ----- Explicit color assignment -----
+    predator_colors = ["green", "blue"]   # supports 2 predators
+    prey_color = "red"
 
-    color_map = {}
+    # Fallback for unusual counts
+    if len(predator_ids) > len(predator_colors):
+        predator_colors = predator_colors + ["cyan", "purple", "orange"][:len(predator_ids)-2]
 
-    # Assign distinct colors to each predator
-    for i, pid in enumerate(predator_ids):
-        color_map[("pred", pid)] = cmap(i / total_agents)
-
-    # Assign distinct colors to each prey (continue color indexing)
-    for j, rid in enumerate(prey_ids, start=len(predator_ids)):
-        color_map[("prey", rid)] = cmap(j / total_agents)
-
-    # Plot predator trajectories
-    for pid, coords in position_history["predators"].items():
+    # ----- Plot predators -----
+    for idx, pid in enumerate(predator_ids):
+        coords = position_history["predators"][pid]
         xs, ys = zip(*coords)
-        color = color_map[("pred", pid)]
-        plt.plot(xs, ys, "-o", color=color, label=f"Predator {pid}")
-        plt.text(xs[-1], ys[-1], f"P{pid}", color=color, fontsize=9, weight="bold")
+        color = predator_colors[idx]
 
-    # Plot prey trajectories
-    for rid, coords in position_history["prey"].items():
+        # Trajectory line
+        plt.plot(xs, ys, "-", color=color, label=f"Predator {pid}")
+
+        # Normal markers for each step
+        plt.plot(xs, ys, "o", color=color, markersize=4)
+
+        # Highlight final position
+        plt.plot(xs[-1], ys[-1], marker="*", color=color, markersize=14, markeredgecolor="black")
+
+        # Label near final position
+        plt.text(xs[-1] + 0.1, ys[-1] - 0.1, f"P{pid}", color=color, fontsize=9, weight="bold")
+
+    # ----- Plot prey -----
+    for rid in prey_ids:
+        coords = position_history["prey"][rid]
         xs, ys = zip(*coords)
-        color = color_map[("prey", rid)]
-        plt.plot(xs, ys, "-o", color=color, label=f"Prey {rid}")
-        plt.text(xs[-1], ys[-1], f"R{rid}", color=color, fontsize=9, weight="bold")
+        color = prey_color
 
-    # Format grid
+        # Trajectory line
+        plt.plot(xs, ys, "-", color=color, label=f"Prey {rid}")
+
+        # Normal markers
+        plt.plot(xs, ys, "o", color=color, markersize=4)
+
+        # Highlight final position
+        plt.plot(xs[-1], ys[-1], marker="X", color=color, markersize=14, markeredgecolor="black")
+
+        # Label near final position
+        plt.text(xs[-1] + 0.1, ys[-1] - 0.1, f"R{rid}", color=color, fontsize=9, weight="bold")
+
+    # ----- Format grid -----
     plt.xlim(-0.5, width - 0.5)
     plt.ylim(height - 0.5, -0.5)
     plt.grid(True, color="black", linewidth=0.5)
     plt.gca().set_aspect("equal", adjustable="box")
-    plt.title("Predator–Prey Trajectories (Distinct Colors)")
+    plt.title("Predator–Prey Trajectories")
     plt.xlabel("X position")
     plt.ylabel("Y position")
-    plt.legend(loc="upper right", fontsize=8, ncol=1)
+    plt.legend(loc="upper right", fontsize=8)
     plt.tight_layout()
     plt.savefig(save_path)
     plt.close()
+
 
 def plot_capture_statistics(
     all_times,
@@ -162,3 +173,45 @@ def plot_capture_statistics(
         out2 = os.path.join(save_dir, "capture_time_hist.png")
         plt.savefig(out2, bbox_inches="tight")
         print(f"[INFO] Saved: {out2}")
+    
+def plot_avg_steps_for_k(avg_capture_time, k_sync, save_dir="figures"):
+    """
+    Saves a simple bar plot showing average steps to capture
+    for a single communication frequency (k_sync).
+    """
+    os.makedirs(save_dir, exist_ok=True)
+
+    plt.figure()
+    plt.title(f"Avg Steps to Capture (k_sync={k_sync})")
+    plt.bar([1], [avg_capture_time if avg_capture_time is not None else 0])
+    plt.ylabel("Avg Steps to Capture")
+    plt.xticks([1], [f"k={k_sync}"])
+    plt.grid(axis="y")
+
+    out_path = os.path.join(save_dir, f"avg_steps_k{k_sync}.png")
+    plt.savefig(out_path, bbox_inches="tight")
+    plt.close()
+    print(f"[INFO] Saved single-k plot to {out_path}")
+
+def plot_k_vs_steps(results, save_path="figures/k_vs_steps.png", line=False):
+    """
+    Plot k_sync vs avg steps to capture.
+    results: dict {k: avg_steps}
+    """
+
+    ks = sorted(results.keys())
+    ys = [results[k] if results[k] is not None else 0 for k in ks]
+
+    plt.figure()
+    if line:
+        plt.plot(ks, ys, marker="o")
+    else:
+        plt.bar(ks, ys)
+
+    plt.xlabel("k_sync (communication interval)")
+    plt.ylabel("Avg Steps to Capture (successful episodes)")
+    plt.title("Communication Frequency vs Capture Efficiency")
+    plt.grid(True)
+    os.makedirs(os.path.dirname(save_path), exist_ok=True)
+    plt.savefig(save_path, bbox_inches="tight")
+    print(f"[INFO] Saved plot to {save_path}")

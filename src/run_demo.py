@@ -35,15 +35,48 @@ from constants import (
     DIRS, ORDERED_DIRS, ACTION_NAMES
 )
 
-from plot_utils import plot_trajectories, record_positions, plot_capture_statistics
+from plot_utils import plot_trajectories, record_positions, plot_capture_statistics, plot_avg_steps_for_k, plot_k_vs_steps
 import matplotlib.pyplot as plt
 
 from comm_module import HTNCommModule
 
 
+
 #print(pp.__file__)
 
+def sweep_k_sync(k_values, num_episodes, time_horizon, debug, keep_prev_action):
+    """
+    Minimal sweep over k_sync values.
+    Returns: dict {k_sync: avg_steps_to_capture}
+    """
+    results = {}
 
+    base_seed = random.randint(0, 10**6)
+
+    for k in k_values:
+        capture_times = []
+
+        for ep in range(num_episodes):
+            seed = base_seed + ep   # same seeds for all k values = fair comparison
+
+            captured, steps, stats = run_single_episode(
+                seed=seed,
+                time_horizon=time_horizon,
+                debug=debug,
+                keep_prev_action=keep_prev_action,
+                render=False,
+                comm_mode="periodic",
+                k_sync=k,
+            )
+
+            if captured:
+                capture_times.append(steps)
+
+        # Compute average (None → no captures)
+        avg_steps = sum(capture_times) / len(capture_times) if capture_times else None
+        results[k] = avg_steps
+
+    return results
 
 def run_single_episode (
     seed: int,
@@ -229,6 +262,10 @@ def run_single_episode (
         plot_trajectories(position_history, grid_size, save_path=plot_path)
         print("[INFO] Saved trajectory plot to figures/trajectories_seed_{seed}.png")
     
+    plot_path = f"figures/trajectories_seed_{seed}.png"
+    plot_trajectories(position_history, grid_size, save_path=plot_path)
+    
+    
     return captured, steps_to_capture, controller.stats
     
 
@@ -315,8 +352,8 @@ def main():
         #seed = 42 + run_idx  # different seed per run
         seed = base_seed + run_idx
         
-        #render = args.render_last and (run_idx == num_episodes - 1)
-        render = True
+        render = args.render_last and (run_idx == num_episodes - 1)
+        #render = True
         if debug:
             print(f"\n[INFO] === Run {run_idx+1}/{num_episodes}, seed={seed} ===")
 
@@ -366,10 +403,23 @@ def main():
         save_dir="figures",
     )
     
+    if comm_mode == "periodic":
+        plot_avg_steps_for_k(avg_capture_time, k_sync, save_dir="figures")
+    
     
 
 
 if __name__ == "__main__":
+    # k_values = [1, 5, 10, 20, 50]
+    # results = sweep_k_sync(
+    #     k_values=k_values,
+    #     num_episodes=20,
+    #     time_horizon=200,
+    #     debug=False,
+    #     keep_prev_action=True,
+    # )
+
+    #plot_k_vs_steps(results, save_path="figures/k_vs_steps.png", line=True)
     main()
 
 
