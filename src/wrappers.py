@@ -34,7 +34,7 @@ class ActionLoggingWrapper(posggym.Wrapper):
         if self.debug:
             preds = tuple(self.unwrapped.state[0])
             preys = tuple(self.unwrapped.state[1])
-            print(f"[reset] preds={preds} preys={preys} prey_caught={self._prev_prey_caught}")
+            print(f"[reset] preds={preds} preys={preys} prey_caught={self._prev_prey_caught}, predator_strength={self.unwrapped.model.prey_strength}    ")
         return obs, infos
 
     def _log_capture_events(self, rewards, next_state):
