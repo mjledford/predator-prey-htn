@@ -32,53 +32,23 @@ import gtpyhop
 from constants import (
     DO_NOTHING, UP, DOWN, LEFT, RIGHT,
     EMPTY, WALL, PRED, PREY,
-    DIRS, ORDERED_DIRS, ACTION_NAMES
+    DIRS, ORDERED_DIRS, ACTION_NAMES, FIG_DIR
 )
 
-from plot_utils import plot_trajectories, record_positions, plot_capture_statistics, plot_avg_steps_for_k, plot_k_vs_steps
+from plot_utils import plot_trajectories, record_positions, plot_capture_statistics, plot_avg_steps_for_k, plot_k_vs_steps, plot_comm_modes_comparison, plot_comm_modes_success_rates, plot_k_vs_costs
 import matplotlib.pyplot as plt
 
-from comm_module import HTNCommModule
+from comm_module import HTNCommModule, CommStats
 
-
+from sweep_utils import sweep_k_sync, sweep_comm_modes
 
 #print(pp.__file__)
 
-def sweep_k_sync(k_values, num_episodes, time_horizon, debug, keep_prev_action):
-    """
-    Minimal sweep over k_sync values.
-    Returns: dict {k_sync: avg_steps_to_capture}
-    """
-    results = {}
 
-    base_seed = random.randint(0, 10**6)
 
-    for k in k_values:
-        capture_times = []
-
-        for ep in range(num_episodes):
-            seed = base_seed + ep   # same seeds for all k values = fair comparison
-
-            captured, steps, stats = run_single_episode(
-                seed=seed,
-                time_horizon=time_horizon,
-                debug=debug,
-                keep_prev_action=keep_prev_action,
-                render=False,
-                comm_mode="periodic",
-                k_sync=k,
-            )
-
-            if captured:
-                capture_times.append(steps)
-
-        # Compute average (None → no captures)
-        avg_steps = sum(capture_times) / len(capture_times) if capture_times else None
-        results[k] = avg_steps
-
-    return results
 
 def run_single_episode (
+    run_idx: int,
     seed: int,
     time_horizon: int = 200,
     debug: bool = False,
@@ -118,7 +88,7 @@ def run_single_episode (
    
     if debug:
         print(f"Run POSGGym Predator-Prey with GTPyhop HTN planner. [DEBUG MODE]")
-        print(f"[DEBUG] Printing GTPyhop Domain")
+        print(f"[DEBUG | Run_IDX={run_idx}] Printing GTPyhop Domain")
         gtpyhop.print_domain()
     
     # seed = 42 for reproducible run where the prey is captured around cell (10,9)
@@ -147,7 +117,7 @@ def run_single_episode (
     
     if debug:
         print("=========================")
-        print(f"[DEBUG] Starting episode with agents: {env.agents}")
+        print(f"[DEBUG | Run_IDX={run_idx}] Starting episode with agents: {env.agents}")
         print("[DEBUG] env.agents:", list(env.agents))
         print("[DEBUG] obs keys:  ", list(observations.keys()))
         for aid in env.agents:
@@ -155,7 +125,7 @@ def run_single_episode (
         print("=========================")
         
         
-    observer = MinimalObserver(pretty=False)
+    observer = MinimalObserver(pretty=False, debug=debug, run_idx=run_idx)
     observer.on_reset(env, observations,infos)
     
     
@@ -171,36 +141,7 @@ def run_single_episode (
             keep_prev_action=keep_prev_action,
         )
         
-        # Build a GTPyhop state with exactly the methods we need
-        # s = build_planner_state(env, observations)
-        
-        # # 
-        # actions = {}
-        
-        # # Unified state conventions:
-        # # Inject per-agent memory so joint methods can use it
-        # s.prev_actions = {aid: agent_memory[aid]["prev_action"] for aid in agent_ids}
-        # s.keep_prev_action = keep_prev_action
-        # s.rngs = {aid: agent_memory[aid]["rng"] for aid in agent_ids}
-        # s.agent_ids = agent_ids
-
-        # # ---- Joint Planning: single HTN call ----
-        # plan = gtpyhop.find_plan(s, [("choose_joint_action", tuple(agent_ids))])
-        # actions = joint_plan_to_actions(plan, agent_ids)
-        
-        # Controller calls planner for each agent (Non Cooperative)
-        # for agent_id in env.agents:
-        #     s.rng = agent_memory[agent_id]["rng"]
-        #     # Inject memory + flags into state for planner use
-        #     s.prev_action = agent_memory[agent_id]["prev_action"]
-        #     s.keep_prev_action = keep_prev_action
-        #     #s.agent_ids = agent_ids
-
-           
-        #     #plan = gtpyhop.find_plan(s, [("choose_action", agent_id)])
-        #     plan = gtpyhop.find_plan(s, [("choose_action", agent_id)])
-        #     actions[agent_id] = plan_to_actions(plan)
-            
+       
         
         if debug:
             readable = {aid: f"{act} ({ACTION_NAMES[act]})" for aid, act in actions.items()}
@@ -256,14 +197,13 @@ def run_single_episode (
     grid_size = env.unwrapped.model.grid_size if hasattr(env.unwrapped.model, "grid_size") else (10, 10)
     env.close()
     
+    plot_path = os.path.join(FIG_DIR, f"trajectories_seed_{seed}.png")
     if save_plot_trajectories_each_episode:
-        os.makedirs("figures", exist_ok=True)
-        plot_path = f"figures/trajectories_seed_{seed}.png"
         plot_trajectories(position_history, grid_size, save_path=plot_path)
         print("[INFO] Saved trajectory plot to figures/trajectories_seed_{seed}.png")
     
-    plot_path = f"figures/trajectories_seed_{seed}.png"
-    plot_trajectories(position_history, grid_size, save_path=plot_path)
+    
+    #plot_trajectories(position_history, grid_size, save_path=plot_path)
     
     
     return captured, steps_to_capture, controller.stats
@@ -287,10 +227,10 @@ def main():
                         help="When patrolling, exclude the previous action if alternatives exist.")
     parser.add_argument("--time-horizon", type=int, default=200, help="Maximum number of steps per episode.")
     parser.add_argument("--num-episodes", type=int, default=1, help="Number of episodes to run.")
-    parser.add_argument("--render-last", action="store_true", help="Render the last episode visually.")
+    parser.add_argument("--render-last", action="store_false", help="Render the last episode visually.")
     parser.add_argument("--seed", type=int, default=None, help="Global experiment seed (optional). If not set, seeds vary per episode.")
     parser.add_argument("--rerun-seed", type=int, default=None, help="Run exactly one episode with this seed (overrides num-episodes and base seed).")
-    parser.add_argument("--comm-mode", type=str, default="full", choices=["full", "periodic", "event"], help="Communication mode between agents and planner.")
+    parser.add_argument("--comm-mode", type=str, default="full", choices=["full", "periodic", "event", "none"], help="Communication mode between agents and planner.")
     parser.add_argument("--k-sync", type=int, default=5, help="Synchronization interval for periodic communication (comm-mode=periodic).")
     
     
@@ -330,6 +270,7 @@ def main():
     if args.rerun_seed is not None:
         print(f"[INFO] Re-running single episode with seed {args.rerun_seed}")
         run_single_episode(
+            run_idx=0,
             seed=args.rerun_seed,
             time_horizon=time_horizon,
             debug=debug,
@@ -358,11 +299,14 @@ def main():
             print(f"\n[INFO] === Run {run_idx+1}/{num_episodes}, seed={seed} ===")
 
         captured, steps, stats = run_single_episode(
+            run_idx=run_idx,
             seed=seed,
             time_horizon=time_horizon,
             debug=debug,
             keep_prev_action=keep_prev_action,
             render=render,
+            k_sync=k_sync,
+            comm_mode=comm_mode,
         )
         total_messages += stats.messages
         total_replans += stats.replans
@@ -395,31 +339,68 @@ def main():
     print("=========================================\n")
     
     # ---- Call the centralized plotting function ----
+    ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
+    fig_dir = os.path.join(ROOT, "figs")
+    os.makedirs(fig_dir, exist_ok=True)
     plot_capture_statistics(
         all_times=all_times,
         capture_times=capture_times,
         avg_capture_time=avg_capture_time,
         avg_steps_all=avg_steps_all,
-        save_dir="figures",
+        save_dir=FIG_DIR,
     )
     
     if comm_mode == "periodic":
-        plot_avg_steps_for_k(avg_capture_time, k_sync, save_dir="figures")
+        plot_avg_steps_for_k(avg_capture_time, k_sync, save_dir=FIG_DIR)
     
     
 
 
 if __name__ == "__main__":
+    # UNCOMMENT TO DO K-SWEEP DIRECTLY FROM THIS FILE
     # k_values = [1, 5, 10, 20, 50]
     # results = sweep_k_sync(
+    #     seed = 123456,
     #     k_values=k_values,
     #     num_episodes=20,
     #     time_horizon=200,
     #     debug=False,
     #     keep_prev_action=True,
     # )
-
-    #plot_k_vs_steps(results, save_path="figures/k_vs_steps.png", line=True)
+    
+    # plot_path = os.path.join(FIG_DIR, "k_vs_steps.png")
+    # plot_k_vs_steps(results, save_path=plot_path, line=True)
+    #***************************************************************
+    
+    # UNCOMMENT TO DO COMM-MODE SWEEP DIRECTLY FROM THIS FILE
+    # results = sweep_comm_modes(
+    #     seed=123456,
+    #     num_episodes=20,
+    #     time_horizon=200,
+    #     debug=False,
+    #     keep_prev_action=True,
+    #     k_sync=10
+    # )
+    # plot_path = os.path.join(FIG_DIR, "comm_modes_vs_steps.png")
+    # plot_comm_modes_comparison(results, save_path=plot_path)
+    # plot_comm_modes_success_rates(results, save_path=os.path.join(FIG_DIR, "comm_modes_success_rates.png"))
+    #***************************************************************
+    
+    # UNCOMMENT TO PLOT K-SWEEP VS COST
+    # k_values = [1, 5, 10, 20, 50]
+    # results = sweep_k_sync(
+    #     seed = 123456,
+    #     k_values=k_values,
+    #     num_episodes=20,
+    #     time_horizon=200,
+    #     debug=False,
+    #     keep_prev_action=True,
+    # )
+    # plot_path = os.path.join(FIG_DIR, "k_vs")
+    # plot_k_vs_costs(results, save_path_prefix=plot_path)
+    
+    #***************************************************************
+    # OTHERWISE, UNCOMMENT TO RUN MAIN EXPERIMENT FUNCTION
     main()
 
 
