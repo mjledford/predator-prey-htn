@@ -2,6 +2,7 @@ import os
 import matplotlib.pyplot as plt
 import matplotlib.cm as cm
 import numpy as np
+from constants import FIG_DIR
 
 
 def record_positions(env, position_history, init=False):
@@ -110,7 +111,7 @@ def plot_capture_statistics(
     capture_times,
     avg_capture_time,
     avg_steps_all,
-    save_dir="figures",
+    save_dir=FIG_DIR,
 ):
     """
     Create plots summarizing capture performance across runs.
@@ -174,7 +175,7 @@ def plot_capture_statistics(
         plt.savefig(out2, bbox_inches="tight")
         print(f"[INFO] Saved: {out2}")
     
-def plot_avg_steps_for_k(avg_capture_time, k_sync, save_dir="figures"):
+def plot_avg_steps_for_k(avg_capture_time, k_sync, save_dir="figs/avg_steps_k_sync"):
     """
     Saves a simple bar plot showing average steps to capture
     for a single communication frequency (k_sync).
@@ -183,7 +184,8 @@ def plot_avg_steps_for_k(avg_capture_time, k_sync, save_dir="figures"):
 
     plt.figure()
     plt.title(f"Avg Steps to Capture (k_sync={k_sync})")
-    plt.bar([1], [avg_capture_time if avg_capture_time is not None else 0])
+    plt.ylim(0, 200)
+    plt.bar([1], [avg_capture_time if avg_capture_time is not None else 0], color="skyblue")
     plt.ylabel("Avg Steps to Capture")
     plt.xticks([1], [f"k={k_sync}"])
     plt.grid(axis="y")
@@ -193,25 +195,150 @@ def plot_avg_steps_for_k(avg_capture_time, k_sync, save_dir="figures"):
     plt.close()
     print(f"[INFO] Saved single-k plot to {out_path}")
 
-def plot_k_vs_steps(results, save_path="figures/k_vs_steps.png", line=False):
+def plot_k_vs_steps(results, save_path="figs/k_vs_steps.png", line=False):
     """
     Plot k_sync vs avg steps to capture.
-    results: dict {k: avg_steps}
+    
+    Args:
+        results: dict {k: {"avg_steps": float, ...}}
+        save_path: where to save the plot
+        line: if True, use line plot instead of bar
     """
-
     ks = sorted(results.keys())
-    ys = [results[k] if results[k] is not None else 0 for k in ks]
+    ys = [(results[k]["avg_steps"] if results[k]["avg_steps"] is not None else 0) for k in ks]
 
-    plt.figure()
+    plt.figure(figsize=(6, 4), dpi=300)  # Set size + resolution for LaTeX
     if line:
-        plt.plot(ks, ys, marker="o")
+        plt.plot(ks, ys, marker="o", color="steelblue", linewidth=2)
+        for i, y in enumerate(ys):
+            plt.text(ks[i], y + 4, f"{y:.1f}", ha='center', fontsize=8)
     else:
-        plt.bar(ks, ys)
+        plt.bar(ks, ys, color="steelblue", width=4)
+        for i, y in enumerate(ys):
+            plt.text(ks[i], y + 2, f"{y:.1f}", ha='center', fontsize=8)
 
     plt.xlabel("k_sync (communication interval)")
-    plt.ylabel("Avg Steps to Capture (successful episodes)")
+    plt.ylabel("Avg Steps to Capture")
     plt.title("Communication Frequency vs Capture Efficiency")
-    plt.grid(True)
+    plt.ylim(0, 200)
+    plt.xticks(ks)
+    plt.grid(axis='y', linestyle='--', alpha=0.7)
+
     os.makedirs(os.path.dirname(save_path), exist_ok=True)
+    plt.tight_layout()
     plt.savefig(save_path, bbox_inches="tight")
+    plt.close()
     print(f"[INFO] Saved plot to {save_path}")
+
+def plot_comm_modes_comparison(results, save_path="figs/comm_modes_vs_steps.png"):
+    """
+    Plot comparison of communication modes.
+
+    Args:
+        results: dict {
+            mode: {
+                "avg_steps": float,
+                "success_rate": float,
+                "avg_messages": float,
+                "avg_replans": float
+            }
+        }
+    """
+    modes = ["full", "periodic", "event", "none"]
+    labels = ["Full", "Periodic", "Event", "None"]
+    colors = ["seagreen", "dodgerblue", "orange", "crimson"]
+
+    # Extract data
+    avg_steps = [results[mode]["avg_steps"] if results[mode]["avg_steps"] is not None else 0 for mode in modes]
+    success_rates = [results[mode]["success_rate"] for mode in modes]
+
+    # Plot avg steps to capture
+    plt.figure(figsize=(6, 4))
+    bars = plt.bar(labels, avg_steps, color=colors)
+    for bar, val in zip(bars, avg_steps):
+        plt.text(bar.get_x() + bar.get_width() / 2, val + 2, f"{val:.1f}", ha="center", fontsize=8)
+
+    plt.xlabel("Communication Mode")
+    plt.ylabel("Avg Steps to Capture")
+    plt.title("Effect of Communication Mode on Capture Efficiency")
+    plt.ylim(0, 200)
+    plt.grid(axis="y", linestyle="--", alpha=0.6)
+
+    os.makedirs(os.path.dirname(save_path), exist_ok=True)
+    plt.tight_layout()
+    plt.savefig(save_path, bbox_inches="tight")
+    plt.close()
+    print(f"[INFO] Saved communication mode comparison plot to {save_path}")
+    
+def plot_comm_modes_success_rates(results, save_path="figs/comm_modes_vs_success.png"):
+    modes = ["full", "periodic", "event", "none"]
+    labels = ["Full", "Periodic", "Event", "None"]
+    colors = ["seagreen", "dodgerblue", "orange", "crimson"]
+
+    success_rates = [results[mode]["success_rate"] for mode in modes]
+
+    plt.figure(figsize=(6, 4))
+    bars = plt.bar(labels, success_rates, color=colors)
+    for bar, val in zip(bars, success_rates):
+        plt.text(bar.get_x() + bar.get_width() / 2, val + 0.02, f"{val:.2f}", ha="center", fontsize=8)
+
+    plt.xlabel("Communication Mode")
+    plt.ylabel("Success Rate")
+    plt.title("Effect of Communication Mode on Capture Success")
+    plt.ylim(0, 1.05)
+    plt.grid(axis="y", linestyle="--", alpha=0.6)
+
+    os.makedirs(os.path.dirname(save_path), exist_ok=True)
+    plt.tight_layout()
+    plt.savefig(save_path, bbox_inches="tight")
+    plt.close()
+    print(f"[INFO] Saved success rate plot to {save_path}")
+
+def plot_k_vs_costs(results, save_path_prefix="figs/k_vs"):
+    """
+    Plot two separate bar plots:
+    - Avg Replans per Episode vs k_sync
+    - Avg Messages per Episode vs k_sync
+
+    Args:
+        results: dict {k: {"avg_steps", "avg_replans", "avg_messages", ...}}
+        save_path_prefix: base filepath prefix (default = "figs/k_vs")
+    """
+    os.makedirs(os.path.dirname(save_path_prefix), exist_ok=True)
+
+    ks = sorted(results.keys())
+    replans = [results[k]["avg_replans"] if results[k]["avg_replans"] is not None else 0 for k in ks]
+    messages = [results[k]["avg_messages"] if results[k]["avg_messages"] is not None else 0 for k in ks]
+
+    # --- Plot replans ---
+    plt.figure(figsize=(5.5, 4))
+    plt.bar(ks, replans, color="darkslateblue")
+    for i, val in enumerate(replans):
+        plt.text(ks[i], val + 1, f"{val:.1f}", ha='center', fontsize=8)
+    plt.xlabel("k_sync (communication interval)")
+    plt.ylabel("Avg Replans per Episode")
+    plt.title("Planner Usage vs Communication Frequency")
+    plt.ylim(0, max(replans) * 1.2)
+    plt.grid(axis="y")
+    plt.tight_layout()
+    path_replans = f"{save_path_prefix}_replans.png"
+    plt.savefig(path_replans, bbox_inches="tight")
+    print(f"[INFO] Saved replans plot to {path_replans}")
+    plt.close()
+
+    # --- Plot messages ---
+    plt.figure(figsize=(5.5, 4))
+    plt.bar(ks, messages, color="seagreen")
+    for i, val in enumerate(messages):
+        plt.text(ks[i], val + 1, f"{val:.1f}", ha='center', fontsize=8)
+    plt.xlabel("k_sync (communication interval)")
+    plt.ylabel("Avg Messages per Episode")
+    plt.title("Communication Cost vs Frequency")
+    plt.ylim(0, max(messages) * 1.2)
+    plt.grid(axis="y")
+    plt.tight_layout()
+    path_msgs = f"{save_path_prefix}_messages.png"
+    plt.savefig(path_msgs, bbox_inches="tight")
+    print(f"[INFO] Saved messages plot to {path_msgs}")
+    plt.close()
+

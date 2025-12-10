@@ -10,10 +10,12 @@ class MinimalObserver:
     a compact summary. Great for smoke tests or wiring a planner later.
     """
 
-    def __init__(self, pretty: bool = False):
+    def __init__(self, pretty: bool = False, debug: bool = False, run_idx: int = 0):
         self.pretty = pretty
         self.obs_dim = None
         self.step = 0
+        self.debug = debug
+        self.run_idx = run_idx
 
     # ---- lifecycle hooks --------------------------------------------------
 
@@ -48,7 +50,8 @@ class MinimalObserver:
             n_pred = sum(1 for v in obs if v == PREDATOR) - 1  # minus self at center
             # compute relative offsets to any visible prey
             prey_offsets = self._prey_offsets(obs, size)
-            print(f"[observer:t={self.step:02d}] agent={aid} sees prey={n_prey} pred_others={n_pred} prey_offsets={prey_offsets}")
+            if self.debug:
+                print(f"[observer | run_idx={self.run_idx}:t={self.step:02d}] agent={aid} sees prey={n_prey} pred_others={n_pred} prey_offsets={prey_offsets}")
 
             if self.pretty:
                 print(self._pretty_obs(obs, size))

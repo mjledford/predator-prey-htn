@@ -1,3 +1,4 @@
+import os
 # Action codes
 DO_NOTHING, UP, DOWN, LEFT, RIGHT = 0, 1, 2, 3, 4
 
@@ -22,3 +23,7 @@ ACTION_NAMES = {
     3: "LEFT",
     4: "RIGHT",
 }
+
+ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
+FIG_DIR = os.path.join(ROOT, "figs")
+os.makedirs(FIG_DIR, exist_ok=True)
