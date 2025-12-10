@@ -38,7 +38,7 @@ The core research question:
 - **Communication module** governs how and when plans are transmitted
 
 ## Directory Structure
-
+```
 src/
 ├── comm_module.py # Communication logic (full, periodic, event, none)
 ├── constants.py # Action IDs and environment codes
@@ -50,7 +50,7 @@ src/
 ├── run_demo.py # Main entry point for running experiments
 ├── sweep_utils.py # Experiment sweeps (e.g., periodic comm vs k)
 ├── wrappers.py # POSGGym wrappers for action logging
-
+```
 
 ## Running the Simulation
 
