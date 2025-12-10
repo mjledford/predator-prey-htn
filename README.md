@@ -87,7 +87,14 @@ cd src
 python run_demo.py --comm-mode periodic --k-sync 10 --num-episodes 20
 ```
 
-## Requirements - Python 3.10+ - posggym - gtpyhop - matplotlib - numpy ### Installation We recommend using a virtual environment:
+## Requirements
+* Python 3.10+
+* posggym
+* gtpyhop
+* matplotlib
+* numpy 
+
+### Installation We recommend using a virtual environment:
 ```bash
 python3 -m venv venv
 source venv/bin/activate
